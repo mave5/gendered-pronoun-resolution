@@ -1,6 +1,9 @@
 import os
 import numpy as np
 import pandas as pd
+from keras import backend, models, layers, initializers, regularizers, constraints, optimizers
+from keras import callbacks as kc
+from keras import optimizers as ko
 
 
 def compute_offset_no_spaces(text, offset):
@@ -117,3 +120,71 @@ def run_bert(data):
 		emb.iloc[i] = [emb_A, emb_B, emb_P, label]
 
 	return emb
+
+
+def build_mlp_model(params):
+    input_shape=params["input_shape"]
+    dense_layer_sizes=params["dense_layer_sizes"]
+    dropout_rate=params["dropout_rate"]
+    lambd=params["lambd"]
+    bnEnable=params["bnEnable"]
+    
+    X_input = layers.Input(input_shape)
+
+	# First dense layer
+    X = layers.Dense(dense_layer_sizes[0], name = 'dense0')(X_input)
+    if bnEnable is True:
+        X = layers.BatchNormalization(name = 'bn0')(X)
+    X = layers.Activation('relu')(X)
+    X = layers.Dropout(dropout_rate, seed = 7)(X)
+
+	# Second dense layer
+# 	X = layers.Dense(dense_layer_sizes[0], name = 'dense1')(X)
+# 	X = layers.BatchNormalization(name = 'bn1')(X)
+# 	X = layers.Activation('relu')(X)
+# 	X = layers.Dropout(dropout_rate, seed = 9)(X)
+
+	# Output layer
+    X = layers.Dense(3, name = 'output', kernel_regularizer = regularizers.l2(lambd))(X)
+    X = layers.Activation('softmax')(X)
+
+	# Create model
+    model = models.Model(input = X_input, output = X, name = "classif_model")
+    return model
+
+
+def parse_json(embeddings):
+	'''
+	Parses the embeddigns given by BERT, and suitably formats them to be passed to the MLP model
+
+	Input: embeddings, a DataFrame containing contextual embeddings from BERT, as well as the labels for the classification problem
+	columns: "emb_A": contextual embedding for the word A
+	         "emb_B": contextual embedding for the word B
+	         "emb_P": contextual embedding for the pronoun
+	         "label": the answer to the coreference problem: "A", "B" or "NEITHER"
+
+	Output: X, a numpy array containing, for each line in the GAP file, the concatenation of the embeddings of the target words
+	        Y, a numpy array containing, for each line in the GAP file, the one-hot encoded answer to the coreference problem
+	'''
+	embeddings.sort_index(inplace = True) # Sorting the DataFrame, because reading from the json file messed with the order
+	X = np.zeros((len(embeddings),3*768))
+	Y = np.zeros((len(embeddings), 3))
+
+	# Concatenate features
+	for i in range(len(embeddings)):
+		A = np.array(embeddings.loc[i,"emb_A"])
+		B = np.array(embeddings.loc[i,"emb_B"])
+		P = np.array(embeddings.loc[i,"emb_P"])
+		X[i] = np.concatenate((A,B,P))
+
+	# One-hot encoding for labels
+	for i in range(len(embeddings)):
+		label = embeddings.loc[i,"label"]
+		if label == "A":
+			Y[i,0] = 1
+		elif label == "B":
+			Y[i,1] = 1
+		else:
+			Y[i,2] = 1
+
+	return X, Y
